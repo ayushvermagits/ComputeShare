@@ -1,0 +1,1497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ComputeShare — Donate idle CPU, earn tokens</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+tailwind.config = {
+  theme: { extend: { fontFamily: { sans: ['DM Sans','sans-serif'] } } }
+}
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#FAE9C8;font-family:'DM Sans',sans-serif;min-height:100vh}
+.page{display:none}
+.page.active{display:block}
+.page-auth-layout.active{display:flex;align-items:center;justify-content:center;}
+
+.toggle-track{width:9rem;height:4.5rem;border-radius:9999px;border:2px solid;cursor:pointer;position:relative;transition:all .5s;display:flex;align-items:center}
+.toggle-track.off{background:rgba(43,30,20,.1);border-color:rgba(140,90,42,.3)}
+.toggle-track.on{background:#B77C12;border-color:#B77C12;box-shadow:0 10px 30px rgba(183,124,18,.4)}
+.toggle-knob{position:absolute;top:.375rem;width:3.5rem;height:3.5rem;border-radius:9999px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,.15);display:flex;align-items:center;justify-content:center;font-size:1.4rem;transition:left .5s cubic-bezier(.4,0,.2,1)}
+.toggle-track.off .toggle-knob{left:.375rem}
+.toggle-track.on .toggle-knob{left:calc(100% - 3.5rem - .375rem)}
+
+.cpu-ring-progress{transition:stroke-dasharray .6s cubic-bezier(.4,0,.2,1)}
+
+@keyframes ping{0%{transform:scale(1);opacity:1}75%,100%{transform:scale(2);opacity:0}}
+@keyframes pulse-anim{0%,100%{opacity:1}50%{opacity:.5}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes tokenPop{0%{transform:scale(1)}50%{transform:scale(1.2)}100%{transform:scale(1)}}
+.ping-anim{animation:ping 2s cubic-bezier(0,0,.2,1) infinite}
+.pulse-dot{animation:pulse-anim 2s ease infinite}
+.fade-in{animation:fadeIn .35s ease forwards}
+.token-pop{animation:tokenPop .5s ease}
+
+.particle{position:absolute;width:6px;height:6px;border-radius:9999px;background:rgba(183,124,18,.45)}
+
+.card-hover{transition:all .2s ease}
+.card-hover:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(183,124,18,.12)}
+
+.nav-link{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:10px;font-size:.75rem;font-weight:600;transition:all .2s;color:rgba(250,233,200,.7);background:transparent;border:none;cursor:pointer;font-family:inherit}
+.nav-link:hover{color:#FAE9C8;background:rgba(255,255,255,.05)}
+.nav-link.active{background:#B77C12;color:#fff}
+
+.type-btn,.prio-btn{flex:1;padding:.5rem .25rem;border-radius:.75rem;font-size:.8rem;font-weight:700;border:2px solid rgba(226,179,101,.4);background:transparent;color:#8C5A2A;cursor:pointer;transition:all .2s;font-family:inherit}
+.type-btn.active,.prio-btn.active{background:#B77C12;color:#fff;border-color:#B77C12}
+.type-btn:hover,.prio-btn:hover{border-color:rgba(183,124,18,.5)}
+
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:#E2B365;border-radius:9999px}
+
+#mobile-menu{display:none}
+#mobile-menu.open{display:flex;flex-direction:column;gap:4px;padding:8px 16px 12px}
+
+.stat-card{background:rgba(255,255,255,.6);border-radius:1.25rem;padding:1.25rem;border:1px solid rgba(226,179,101,.3);box-shadow:0 2px 6px rgba(0,0,0,.04);transition:all .2s}
+.stat-card:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(183,124,18,.1)}
+.stat-icon{width:36px;height:36px;background:rgba(183,124,18,.15);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#B77C12}
+
+@media(max-width:640px){
+  .grid-2{grid-template-columns:1fr!important}
+  .grid-ring{grid-template-columns:1fr!important}
+}
+
+/* ── CPU Slider ── */
+.cpu-slider{
+  -webkit-appearance:none;appearance:none;
+  width:100%;height:8px;border-radius:9999px;
+  outline:none;cursor:pointer;
+  background:rgba(226,179,101,.3);
+  transition:background .3s;
+}
+.cpu-slider::-webkit-slider-thumb{
+  -webkit-appearance:none;appearance:none;
+  width:26px;height:26px;border-radius:9999px;
+  background:#B77C12;
+  box-shadow:0 0 0 4px rgba(183,124,18,.2),0 4px 12px rgba(183,124,18,.35);
+  cursor:pointer;
+  transition:transform .2s,box-shadow .2s;
+}
+.cpu-slider::-webkit-slider-thumb:hover{
+  transform:scale(1.18);
+  box-shadow:0 0 0 6px rgba(183,124,18,.25),0 6px 18px rgba(183,124,18,.45);
+}
+.cpu-slider::-moz-range-thumb{
+  width:26px;height:26px;border-radius:9999px;
+  background:#B77C12;border:none;
+  box-shadow:0 0 0 4px rgba(183,124,18,.2),0 4px 12px rgba(183,124,18,.35);
+  cursor:pointer;
+  transition:transform .2s;
+}
+.cpu-slider:focus::-webkit-slider-thumb{
+  box-shadow:0 0 0 6px rgba(183,124,18,.3),0 6px 20px rgba(183,124,18,.4);
+}
+.slider-label-tick{
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+}
+.slider-label-tick .tick-line{
+  width:1.5px;height:8px;border-radius:9999px;
+  background:rgba(140,90,42,.25);
+  transition:background .3s;
+}
+.slider-label-tick.active .tick-line{ background:#B77C12; }
+.slider-label-tick .tick-text{
+  font-size:.7rem;font-weight:700;
+  color:rgba(140,90,42,.5);
+  transition:color .3s;
+}
+.slider-label-tick.active .tick-text{ color:#B77C12; }
+
+/* ── Auth Page ── */
+.auth-input{
+  width:100%;padding:.75rem 1rem .75rem 2.75rem;
+  background:rgba(250,233,200,.55);
+  border:1.5px solid rgba(226,179,101,.45);
+  border-radius:.875rem;font-size:.9rem;color:#2B1E14;
+  font-family:inherit;outline:none;
+  transition:border-color .25s,box-shadow .25s,background .25s;
+  box-sizing:border-box;
+}
+.auth-input::placeholder{color:rgba(140,90,42,.45);}
+.auth-input:focus{
+  border-color:#B77C12;
+  background:rgba(250,233,200,.85);
+  box-shadow:0 0 0 3px rgba(183,124,18,.15);
+}
+.auth-input.error{border-color:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.12);}
+.auth-btn{
+  width:100%;padding:.875rem;border:none;border-radius:.875rem;
+  background:#B77C12;color:#fff;font-weight:800;font-size:.95rem;
+  font-family:inherit;cursor:pointer;
+  box-shadow:0 8px 24px rgba(183,124,18,.35);
+  transition:all .2s;
+}
+.auth-btn:hover{background:#8C5A2A;transform:translateY(-1px);box-shadow:0 12px 28px rgba(183,124,18,.45);}
+.auth-btn:active{transform:translateY(0);}
+.auth-btn:disabled{background:rgba(183,124,18,.4);cursor:not-allowed;transform:none;box-shadow:none;}
+.auth-tab{
+  flex:1;padding:.6rem;border:none;background:transparent;
+  font-family:inherit;font-size:.875rem;font-weight:700;
+  cursor:pointer;border-radius:.75rem;transition:all .2s;color:rgba(140,90,42,.6);
+}
+.auth-tab.active{background:#B77C12;color:#fff;box-shadow:0 4px 12px rgba(183,124,18,.3);}
+.social-btn{
+  flex:1;display:flex;align-items:center;justify-content:center;gap:.5rem;
+  padding:.7rem .5rem;border-radius:.875rem;font-family:inherit;
+  font-size:.8rem;font-weight:700;cursor:pointer;transition:all .2s;
+  border:1.5px solid rgba(226,179,101,.4);background:rgba(255,255,255,.6);
+  color:#2B1E14;
+}
+.social-btn:hover{border-color:#B77C12;background:rgba(255,255,255,.9);transform:translateY(-1px);}
+.strength-bar{height:4px;border-radius:9999px;transition:all .4s;flex:1;}
+.field-wrap{position:relative;margin-bottom:1rem;}
+.field-icon{position:absolute;left:.85rem;top:50%;transform:translateY(-50%);color:rgba(140,90,42,.5);pointer-events:none;}
+.eye-btn{position:absolute;right:.85rem;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:rgba(140,90,42,.5);padding:0;font-size:.85rem;}
+@keyframes authSlideIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.auth-form{animation:authSlideIn .3s ease both;}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+.shake{animation:shake .4s ease;}
+</style>
+</head>
+<body>
+
+<!-- NAVBAR -->
+<nav style="position:fixed;top:0;left:0;right:0;z-index:50;background:rgba(43,30,20,.96);backdrop-filter:blur(8px);border-bottom:1px solid rgba(140,90,42,.4)">
+  <div style="max-width:64rem;margin:0 auto;padding:0 1rem;height:3.5rem;display:flex;align-items:center;justify-content:space-between">
+    <button onclick="navigate('landing')" style="display:flex;align-items:center;gap:8px;background:none;border:none;cursor:pointer">
+      <div style="width:28px;height:28px;background:#B77C12;border-radius:8px;display:flex;align-items:center;justify-content:center">
+        <svg viewBox="0 0 20 20" fill="white" width="16" height="16"><path d="M10 2L2 7l8 5 8-5-8-5zM2 13l8 5 8-5M2 10l8 5 8-5"/></svg>
+      </div>
+      <span style="font-weight:900;color:#FAE9C8;font-size:.9rem;letter-spacing:-.02em">ComputeShare</span>
+    </button>
+    <div id="desktop-nav" style="display:flex;align-items:center;gap:4px">
+      <button class="nav-link active" onclick="navigate('landing')" data-page="landing">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M3 12L12 3l9 9M5 10v9a1 1 0 001 1h4v-5h4v5h4a1 1 0 001-1v-9"/></svg>Home
+      </button>
+      <button class="nav-link" onclick="navigate('dashboard')" data-page="dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8"/><line x1="9" y1="4" x2="9" y2="2"/><line x1="12" y1="4" x2="12" y2="2"/><line x1="15" y1="4" x2="15" y2="2"/><line x1="9" y1="22" x2="9" y2="20"/><line x1="12" y1="22" x2="12" y2="20"/><line x1="15" y1="22" x2="15" y2="20"/><line x1="4" y1="9" x2="2" y2="9"/><line x1="4" y1="12" x2="2" y2="12"/><line x1="4" y1="15" x2="2" y2="15"/><line x1="22" y1="9" x2="20" y2="9"/><line x1="22" y1="12" x2="20" y2="12"/><line x1="22" y1="15" x2="20" y2="15"/></svg>Dashboard
+      </button>
+      <button class="nav-link" onclick="navigate('tasks')" data-page="tasks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>Submit Task
+      </button>
+      <button class="nav-link" onclick="navigate('wallet')" data-page="wallet">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M19 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2z"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/><circle cx="17" cy="13" r="1" fill="currentColor"/></svg>Wallet
+      </button>
+      <button class="nav-link" onclick="navigate('leaderboard')" data-page="leaderboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M6 9H3l1 5h2m12-5h3l-1 5h-2M6 9V4h12v5a6 6 0 01-12 0z"/><path d="M9 17v2m6-2v2M7 19h10"/></svg>Leaderboard
+      </button>
+      <div style="width:1px;height:20px;background:rgba(140,90,42,.3);margin:0 4px"></div>
+      <div id="nav-user-area" style="position:relative;display:flex;align-items:center;">
+        <button onclick="navigate('auth')" id="nav-login-btn" class="nav-link" style="background:rgba(183,124,18,.2);color:#E2B365;border:1px solid rgba(183,124,18,.35);">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="14" height="14"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          Sign In
+        </button>
+        <div id="nav-avatar" style="display:none;align-items:center;gap:.5rem;cursor:pointer" onclick="toggleUserMenu()">
+          <div style="width:30px;height:30px;border-radius:9999px;background:linear-gradient(135deg,#B77C12,#E2B365);display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:900;color:#fff" id="nav-avatar-initials">JD</div>
+          <span style="font-size:.78rem;font-weight:700;color:#FAE9C8" id="nav-username-display">John</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12" style="color:rgba(250,233,200,.6)"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+        <div id="user-dropdown" style="display:none;position:absolute;top:3.75rem;right:1rem;background:#2B1E14;border:1px solid rgba(140,90,42,.4);border-radius:1rem;padding:.5rem;min-width:180px;box-shadow:0 16px 40px rgba(0,0,0,.35);z-index:100;">
+          <div style="padding:.75rem 1rem .5rem;border-bottom:1px solid rgba(140,90,42,.3);margin-bottom:.4rem">
+            <p style="font-size:.8rem;font-weight:800;color:#FAE9C8" id="dropdown-name">John Doe</p>
+            <p style="font-size:.7rem;color:rgba(226,179,101,.6)" id="dropdown-email"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="93f9fcfbfdd3f6ebf2fee3fff6bdf0fcfe">[email&#160;protected]</a></p>
+          </div>
+          <button onclick="navigate('dashboard');toggleUserMenu()" style="display:flex;align-items:center;gap:.6rem;width:100%;padding:.55rem 1rem;background:none;border:none;color:rgba(250,233,200,.8);font-size:.8rem;font-weight:600;cursor:pointer;border-radius:.6rem;font-family:inherit;transition:background .15s" onmouseover="this.style.background='rgba(255,255,255,.07)'" onmouseout="this.style.background='none'">⚡ Dashboard</button>
+          <button onclick="navigate('wallet');toggleUserMenu()" style="display:flex;align-items:center;gap:.6rem;width:100%;padding:.55rem 1rem;background:none;border:none;color:rgba(250,233,200,.8);font-size:.8rem;font-weight:600;cursor:pointer;border-radius:.6rem;font-family:inherit;transition:background .15s" onmouseover="this.style.background='rgba(255,255,255,.07)'" onmouseout="this.style.background='none'">👛 Wallet</button>
+          <div style="border-top:1px solid rgba(140,90,42,.3);margin:.4rem 0"></div>
+          <button onclick="logOut()" style="display:flex;align-items:center;gap:.6rem;width:100%;padding:.55rem 1rem;background:none;border:none;color:#ef4444;font-size:.8rem;font-weight:600;cursor:pointer;border-radius:.6rem;font-family:inherit;transition:background .15s" onmouseover="this.style.background='rgba(239,68,68,.08)'" onmouseout="this.style.background='none'">🚪 Sign Out</button>
+        </div>
+      </div>
+    </div>
+    <button id="hamburger" onclick="document.getElementById('mobile-menu').classList.toggle('open')" style="display:none;background:none;border:none;cursor:pointer;color:#FAE9C8">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    </button>
+  </div>
+  <div id="mobile-menu" style="background:rgba(43,30,20,1);border-top:1px solid rgba(140,90,42,.3)">
+    <button class="nav-link" onclick="navigate('landing');document.getElementById('mobile-menu').classList.remove('open')" style="font-size:.875rem;padding:8px 12px;text-align:left">🏠 Home</button>
+    <button class="nav-link" onclick="navigate('dashboard');document.getElementById('mobile-menu').classList.remove('open')" style="font-size:.875rem;padding:8px 12px;text-align:left">⚡ Dashboard</button>
+    <button class="nav-link" onclick="navigate('tasks');document.getElementById('mobile-menu').classList.remove('open')" style="font-size:.875rem;padding:8px 12px;text-align:left">📋 Submit Task</button>
+    <button class="nav-link" onclick="navigate('wallet');document.getElementById('mobile-menu').classList.remove('open')" style="font-size:.875rem;padding:8px 12px;text-align:left">👛 Wallet</button>
+    <button class="nav-link" onclick="navigate('leaderboard');document.getElementById('mobile-menu').classList.remove('open')" style="font-size:.875rem;padding:8px 12px;text-align:left">🏆 Leaderboard</button>
+    <div style="border-top:1px solid rgba(140,90,42,.3);margin:.25rem 0"></div>
+    <button id="mobile-auth-btn" onclick="navigate('auth');document.getElementById('mobile-menu').classList.remove('open')" style="font-size:.875rem;padding:8px 12px;text-align:left;color:#E2B365" class="nav-link">👤 Sign In / Sign Up</button>
+    <button id="mobile-logout-btn" onclick="logOut()" style="display:none;font-size:.875rem;padding:8px 12px;text-align:left;color:#ef4444" class="nav-link">🚪 Sign Out</button>
+  </div>
+</nav>
+
+<!-- ════════════════════════ AUTH PAGE ════════════════════════ -->
+<div id="page-auth" class="page page-auth-layout" style="min-height:100vh;background:#FAE9C8;padding:5rem 1rem 2rem;position:relative;overflow:hidden;">
+  <!-- Background blobs -->
+  <div style="position:absolute;top:-4rem;left:-4rem;width:28rem;height:28rem;border-radius:9999px;background:rgba(183,124,18,.1);filter:blur(70px);pointer-events:none"></div>
+  <div style="position:absolute;bottom:-4rem;right:-4rem;width:22rem;height:22rem;border-radius:9999px;background:rgba(226,179,101,.15);filter:blur(70px);pointer-events:none"></div>
+  <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.04;pointer-events:none"><defs><pattern id="ag" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0L0 0 0 40" fill="none" stroke="#8C5A2A" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#ag)"/></svg>
+
+  <div style="position:relative;width:100%;max-width:26rem;">
+    <!-- Logo -->
+    <div style="text-align:center;margin-bottom:2rem;">
+      <button onclick="navigate('landing')" style="display:inline-flex;flex-direction:column;align-items:center;gap:.6rem;background:none;border:none;cursor:pointer;">
+        <div style="width:52px;height:52px;background:linear-gradient(135deg,#B77C12,#E2B365);border-radius:16px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(183,124,18,.35);">
+          <svg viewBox="0 0 20 20" fill="white" width="26" height="26"><path d="M10 2L2 7l8 5 8-5-8-5zM2 13l8 5 8-5M2 10l8 5 8-5"/></svg>
+        </div>
+        <span style="font-size:1.35rem;font-weight:900;color:#2B1E14;letter-spacing:-.03em;">ComputeShare</span>
+      </button>
+      <p style="font-size:.85rem;color:#8C5A2A;margin-top:.4rem;">Donate CPU. Earn tokens. Build the future.</p>
+    </div>
+
+    <!-- Card -->
+    <div style="background:rgba(255,255,255,.75);backdrop-filter:blur(16px);border-radius:1.5rem;border:1px solid rgba(226,179,101,.4);padding:2rem;box-shadow:0 20px 60px rgba(183,124,18,.12);">
+
+      <!-- Tab switcher -->
+      <div style="display:flex;gap:.35rem;background:rgba(250,233,200,.7);border-radius:.875rem;padding:.3rem;margin-bottom:1.75rem;">
+        <button class="auth-tab active" id="tab-login" onclick="switchAuthTab('login')">Sign In</button>
+        <button class="auth-tab" id="tab-signup" onclick="switchAuthTab('signup')">Create Account</button>
+      </div>
+
+      <!-- Error banner -->
+      <div id="auth-error" style="display:none;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:.75rem;padding:.65rem 1rem;margin-bottom:1rem;font-size:.8rem;font-weight:600;color:#dc2626;display:none;align-items:center;gap:.5rem;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span id="auth-error-text"></span>
+      </div>
+
+      <!-- ── LOGIN FORM ── -->
+      <div id="login-form" class="auth-form">
+        <div class="field-wrap">
+          <div class="field-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </div>
+          <input class="auth-input" type="email" id="login-email" placeholder="Email address" autocomplete="email"/>
+        </div>
+        <div class="field-wrap">
+          <div class="field-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <input class="auth-input" type="password" id="login-password" placeholder="Password" autocomplete="current-password" style="padding-right:2.75rem"/>
+          <button class="eye-btn" onclick="togglePwd('login-password',this)" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-bottom:1.25rem;">
+          <button onclick="showForgot()" style="background:none;border:none;font-size:.78rem;font-weight:600;color:#B77C12;cursor:pointer;font-family:inherit;padding:0;">Forgot password?</button>
+        </div>
+        <button class="auth-btn" onclick="handleLogin()" id="login-submit-btn">Sign In →</button>
+        <div style="display:flex;align-items:center;gap:.75rem;margin:1.25rem 0;">
+          <div style="flex:1;height:1px;background:rgba(226,179,101,.4)"></div>
+          <span style="font-size:.72rem;font-weight:600;color:rgba(140,90,42,.5);">OR CONTINUE WITH</span>
+          <div style="flex:1;height:1px;background:rgba(226,179,101,.4)"></div>
+        </div>
+        <div style="display:flex;gap:.75rem;">
+          <button class="social-btn" onclick="handleSocialLogin('Google')">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Google
+          </button>
+          <button class="social-btn" onclick="handleSocialLogin('GitHub')">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#2B1E14"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+            GitHub
+          </button>
+        </div>
+        <p style="text-align:center;font-size:.8rem;color:rgba(140,90,42,.7);margin-top:1.25rem;">
+          Don't have an account? <button onclick="switchAuthTab('signup')" style="background:none;border:none;color:#B77C12;font-weight:800;cursor:pointer;font-family:inherit;font-size:.8rem;">Sign up free →</button>
+        </p>
+      </div>
+
+      <!-- ── SIGNUP FORM ── -->
+      <div id="signup-form" class="auth-form" style="display:none;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:0;">
+          <div class="field-wrap" style="margin-bottom:0">
+            <div class="field-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <input class="auth-input" type="text" id="signup-fname" placeholder="First name" autocomplete="given-name"/>
+          </div>
+          <div class="field-wrap" style="margin-bottom:0">
+            <div class="field-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="15" height="15"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <input class="auth-input" type="text" id="signup-lname" placeholder="Last name" autocomplete="family-name"/>
+          </div>
+        </div>
+        <div style="height:.75rem"></div>
+        <div class="field-wrap">
+          <div class="field-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </div>
+          <input class="auth-input" type="email" id="signup-email" placeholder="Email address" autocomplete="email"/>
+        </div>
+        <div class="field-wrap">
+          <div class="field-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <input class="auth-input" type="password" id="signup-password" placeholder="Create password" autocomplete="new-password" style="padding-right:2.75rem" oninput="checkStrength(this.value)"/>
+          <button class="eye-btn" onclick="togglePwd('signup-password',this)" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <!-- Password strength -->
+        <div style="display:flex;gap:.3rem;margin:-0.25rem 0 .75rem;" id="strength-bars">
+          <div class="strength-bar" id="sb1" style="background:rgba(226,179,101,.25)"></div>
+          <div class="strength-bar" id="sb2" style="background:rgba(226,179,101,.25)"></div>
+          <div class="strength-bar" id="sb3" style="background:rgba(226,179,101,.25)"></div>
+          <div class="strength-bar" id="sb4" style="background:rgba(226,179,101,.25)"></div>
+        </div>
+        <p style="font-size:.7rem;color:rgba(140,90,42,.6);margin-bottom:.85rem;" id="strength-label">Enter a password</p>
+        <div class="field-wrap">
+          <div class="field-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <input class="auth-input" type="password" id="signup-confirm" placeholder="Confirm password" autocomplete="new-password" style="padding-right:2.75rem"/>
+          <button class="eye-btn" onclick="togglePwd('signup-confirm',this)" tabindex="-1">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <!-- Terms -->
+        <label style="display:flex;align-items:flex-start;gap:.6rem;margin-bottom:1.25rem;cursor:pointer;">
+          <input type="checkbox" id="signup-terms" style="margin-top:2px;accent-color:#B77C12;width:15px;height:15px;flex-shrink:0;cursor:pointer;"/>
+          <span style="font-size:.78rem;color:rgba(140,90,42,.8);line-height:1.5;">I agree to the <span style="color:#B77C12;font-weight:700;">Terms of Service</span> and <span style="color:#B77C12;font-weight:700;">Privacy Policy</span></span>
+        </label>
+        <button class="auth-btn" onclick="handleSignup()" id="signup-submit-btn">Create Account →</button>
+        <div style="display:flex;align-items:center;gap:.75rem;margin:1.25rem 0;">
+          <div style="flex:1;height:1px;background:rgba(226,179,101,.4)"></div>
+          <span style="font-size:.72rem;font-weight:600;color:rgba(140,90,42,.5);">OR</span>
+          <div style="flex:1;height:1px;background:rgba(226,179,101,.4)"></div>
+        </div>
+        <div style="display:flex;gap:.75rem;">
+          <button class="social-btn" onclick="handleSocialLogin('Google')">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Google
+          </button>
+          <button class="social-btn" onclick="handleSocialLogin('GitHub')">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="#2B1E14"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+            GitHub
+          </button>
+        </div>
+        <p style="text-align:center;font-size:.8rem;color:rgba(140,90,42,.7);margin-top:1.25rem;">
+          Already have an account? <button onclick="switchAuthTab('login')" style="background:none;border:none;color:#B77C12;font-weight:800;cursor:pointer;font-family:inherit;font-size:.8rem;">Sign in →</button>
+        </p>
+      </div>
+
+      <!-- ── FORGOT PASSWORD ── -->
+      <div id="forgot-form" class="auth-form" style="display:none;">
+        <button onclick="showLogin()" style="display:flex;align-items:center;gap:.4rem;background:none;border:none;color:#8C5A2A;font-size:.8rem;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:1.25rem;padding:0">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          Back to Sign In
+        </button>
+        <div style="text-align:center;margin-bottom:1.5rem;">
+          <div style="width:52px;height:52px;background:rgba(183,124,18,.15);border-radius:9999px;display:flex;align-items:center;justify-content:center;margin:0 auto .75rem;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="24" height="24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          </div>
+          <h3 style="font-size:1.05rem;font-weight:800;color:#2B1E14;margin-bottom:.3rem">Reset Password</h3>
+          <p style="font-size:.82rem;color:#8C5A2A;">Enter your email and we'll send a reset link.</p>
+        </div>
+        <div class="field-wrap">
+          <div class="field-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          </div>
+          <input class="auth-input" type="email" id="forgot-email" placeholder="Your email address"/>
+        </div>
+        <button class="auth-btn" onclick="handleForgot()">Send Reset Link</button>
+        <div id="forgot-success" style="display:none;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);border-radius:.75rem;padding:.75rem 1rem;margin-top:1rem;font-size:.82rem;font-weight:600;color:#16a34a;text-align:center;">
+          ✓ Reset link sent! Check your inbox.
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom note -->
+    <p style="text-align:center;font-size:.72rem;color:rgba(140,90,42,.5);margin-top:1.25rem;">
+      🔒 256-bit encrypted · Your data stays private · No spam
+    </p>
+  </div>
+</div>
+
+<!-- ════════════════════════ LANDING ════════════════════════ -->
+<div id="page-landing" class="page" style="min-height:100vh;background:#FAE9C8">
+  <section style="position:relative;padding:7rem 1rem 4rem;overflow:hidden;text-align:center">
+    <div style="position:absolute;inset:0;pointer-events:none">
+      <div style="position:absolute;top:4rem;left:25%;width:24rem;height:24rem;border-radius:9999px;background:rgba(183,124,18,.1);filter:blur(60px)"></div>
+      <div style="position:absolute;bottom:0;right:20%;width:18rem;height:18rem;border-radius:9999px;background:rgba(226,179,101,.2);filter:blur(60px)"></div>
+      <svg style="position:absolute;inset:0;width:100%;height:100%;opacity:.05" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="g" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0L0 0 0 40" fill="none" stroke="#8C5A2A" stroke-width="1"/></pattern></defs><rect width="100%" height="100%" fill="url(#g)"/></svg>
+    </div>
+    <div style="position:relative;max-width:50rem;margin:0 auto">
+      <div style="display:inline-flex;align-items:center;gap:8px;background:rgba(183,124,18,.15);border:1px solid rgba(183,124,18,.3);border-radius:9999px;padding:6px 16px;margin-bottom:1.5rem">
+        <span class="pulse-dot" style="width:6px;height:6px;border-radius:9999px;background:#B77C12;display:inline-block"></span>
+        <span style="font-size:.75rem;font-weight:700;color:#8C5A2A">3,241 donors active right now</span>
+      </div>
+      <h1 style="font-size:clamp(2.5rem,7vw,4.5rem);font-weight:900;color:#2B1E14;line-height:1;letter-spacing:-.03em;margin-bottom:1.25rem">
+        Donate idle CPU,<br><span style="color:#B77C12">earn tokens.</span>
+      </h1>
+      <p style="font-size:1.1rem;color:#8C5A2A;max-width:36rem;margin:0 auto 2.5rem;line-height:1.7">
+        Your browser has power it's not using. ComputeShare turns that idle compute into real value — run distributed tasks and reward contributors automatically.
+      </p>
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+        <button onclick="navigate('dashboard')" style="padding:.875rem 2rem;background:#B77C12;color:#fff;font-weight:800;border-radius:12px;border:none;cursor:pointer;font-size:.875rem;font-family:inherit;box-shadow:0 10px 30px rgba(183,124,18,.35);transition:all .2s" onmouseover="this.style.background='#8C5A2A'" onmouseout="this.style.background='#B77C12'">⚡ Start Contributing</button>
+        <button onclick="navigate('tasks')" style="padding:.875rem 2rem;background:#2B1E14;color:#FAE9C8;font-weight:800;border-radius:12px;border:none;cursor:pointer;font-size:.875rem;font-family:inherit;transition:all .2s" onmouseover="this.style.opacity='.85'" onmouseout="this.style.opacity='1'">Submit a Task →</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live stats -->
+  <section style="max-width:50rem;margin:0 auto;padding:0 1rem 4rem">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
+      <div class="card-hover" style="background:rgba(255,255,255,.7);border-radius:1.25rem;padding:1.25rem;border:1px solid rgba(226,179,101,.4);text-align:center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="20" height="20" style="margin:0 auto .5rem"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8"/><line x1="9" y1="4" x2="9" y2="2"/><line x1="12" y1="4" x2="12" y2="2"/><line x1="15" y1="4" x2="15" y2="2"/><line x1="9" y1="22" x2="9" y2="20"/><line x1="12" y1="22" x2="12" y2="20"/><line x1="15" y1="22" x2="15" y2="20"/><line x1="4" y1="9" x2="2" y2="9"/><line x1="4" y1="12" x2="2" y2="12"/><line x1="4" y1="15" x2="2" y2="15"/><line x1="22" y1="9" x2="20" y2="9"/><line x1="22" y1="12" x2="20" y2="12"/><line x1="22" y1="15" x2="20" y2="15"/></svg>
+        <div style="font-size:1.75rem;font-weight:900;color:#2B1E14">142,800</div>
+        <div style="font-size:.75rem;color:#8C5A2A;font-weight:600;margin-top:2px">CPU Hours Donated</div>
+      </div>
+      <div class="card-hover" style="background:rgba(255,255,255,.7);border-radius:1.25rem;padding:1.25rem;border:1px solid rgba(226,179,101,.4);text-align:center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="20" height="20" style="margin:0 auto .5rem"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+        <div style="font-size:1.75rem;font-weight:900;color:#2B1E14">3,241</div>
+        <div style="font-size:.75rem;color:#8C5A2A;font-weight:600;margin-top:2px">Active Donors</div>
+      </div>
+      <div class="card-hover" style="background:rgba(255,255,255,.7);border-radius:1.25rem;padding:1.25rem;border:1px solid rgba(226,179,101,.4);text-align:center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="20" height="20" style="margin:0 auto .5rem"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <div style="font-size:1.75rem;font-weight:900;color:#2B1E14">18,920</div>
+        <div style="font-size:.75rem;color:#8C5A2A;font-weight:600;margin-top:2px">Tasks Completed</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section style="background:#2B1E14;padding:5rem 1rem">
+    <div style="max-width:50rem;margin:0 auto">
+      <div style="text-align:center;margin-bottom:3rem">
+        <h2 style="font-size:1.875rem;font-weight:900;color:#FAE9C8;margin-bottom:.5rem">How it works</h2>
+        <p style="color:rgba(226,179,101,.7);font-size:.875rem">Three simple steps to start earning.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.5rem">
+        <div class="card-hover" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:1.25rem;padding:1.5rem">
+          <div style="font-size:3rem;font-weight:900;color:rgba(183,124,18,.2);margin-bottom:1rem">01</div>
+          <div style="width:40px;height:40px;background:rgba(183,124,18,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1rem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="18" height="18"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8"/><line x1="9" y1="4" x2="9" y2="2"/><line x1="12" y1="4" x2="12" y2="2"/><line x1="15" y1="4" x2="15" y2="2"/><line x1="9" y1="22" x2="9" y2="20"/><line x1="12" y1="22" x2="12" y2="20"/><line x1="15" y1="22" x2="15" y2="20"/><line x1="4" y1="9" x2="2" y2="9"/><line x1="4" y1="12" x2="2" y2="12"/><line x1="4" y1="15" x2="2" y2="15"/><line x1="22" y1="9" x2="20" y2="9"/><line x1="22" y1="12" x2="20" y2="12"/><line x1="22" y1="15" x2="20" y2="15"/></svg>
+          </div>
+          <h3 style="font-weight:800;color:#FAE9C8;margin-bottom:.5rem">Donate CPU</h3>
+          <p style="font-size:.85rem;color:rgba(250,233,200,.5);line-height:1.6">Toggle sharing on — your browser's idle cycles become compute power.</p>
+        </div>
+        <div class="card-hover" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:1.25rem;padding:1.5rem">
+          <div style="font-size:3rem;font-weight:900;color:rgba(183,124,18,.2);margin-bottom:1rem">02</div>
+          <div style="width:40px;height:40px;background:rgba(183,124,18,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1rem">
+            <svg viewBox="0 0 24 24" fill="#B77C12" width="16" height="16"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          </div>
+          <h3 style="font-weight:800;color:#FAE9C8;margin-bottom:.5rem">Earn Tokens</h3>
+          <p style="font-size:.85rem;color:rgba(250,233,200,.5);line-height:1.6">Get CST tokens automatically for every minute of compute contributed.</p>
+        </div>
+        <div class="card-hover" style="background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:1.25rem;padding:1.5rem">
+          <div style="font-size:3rem;font-weight:900;color:rgba(183,124,18,.2);margin-bottom:1rem">03</div>
+          <div style="width:40px;height:40px;background:rgba(183,124,18,.2);border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:1rem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="16" height="16"><circle cx="12" cy="12" r="9"/><path d="M12 7v1m0 8v1m-3-5h6m-6 2h4"/></svg>
+          </div>
+          <h3 style="font-weight:800;color:#FAE9C8;margin-bottom:.5rem">Spend Tokens</h3>
+          <p style="font-size:.85rem;color:rgba(250,233,200,.5);line-height:1.6">Submit your own compute tasks or trade tokens on the platform.</p>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:3rem">
+        <button onclick="navigate('dashboard')" style="padding:.875rem 2rem;background:#B77C12;color:#fff;font-weight:800;border-radius:12px;border:none;cursor:pointer;font-size:.875rem;font-family:inherit;transition:all .2s" onmouseover="this.style.background='#E2B365'" onmouseout="this.style.background='#B77C12'">Open Dashboard →</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ════════════════════════ DASHBOARD ════════════════════════ -->
+<div id="page-dashboard" class="page" style="min-height:100vh;background:#FAE9C8;padding:5.5rem 1rem 3rem">
+  <div style="max-width:62rem;margin:0 auto">
+    <div style="margin-bottom:1.75rem">
+      <h1 style="font-size:1.5rem;font-weight:900;color:#2B1E14">Donor Dashboard</h1>
+      <p style="font-size:.875rem;color:#8C5A2A">Control your contribution and track rewards.</p>
+    </div>
+
+    <!-- BIG TOGGLE -->
+    <div id="toggle-card" style="position:relative;border-radius:1.5rem;border:2px solid rgba(226,179,101,.4);padding:2rem;margin-bottom:1.5rem;text-align:center;overflow:hidden;background:rgba(255,255,255,.6);transition:all .5s">
+      <div id="toggle-particles" style="position:absolute;inset:0;pointer-events:none;display:none">
+        <div class="ping-anim particle" style="left:15%;top:22%;animation-delay:0s"></div>
+        <div class="ping-anim particle" style="left:28%;top:55%;animation-delay:.35s"></div>
+        <div class="ping-anim particle" style="left:44%;top:20%;animation-delay:.7s"></div>
+        <div class="ping-anim particle" style="left:60%;top:60%;animation-delay:1.05s"></div>
+        <div class="ping-anim particle" style="left:74%;top:28%;animation-delay:1.4s"></div>
+        <div class="ping-anim particle" style="left:87%;top:48%;animation-delay:1.75s"></div>
+      </div>
+      <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.14em;margin-bottom:1rem">CPU Sharing</p>
+      <div style="display:flex;justify-content:center;margin-bottom:1.25rem">
+        <div class="toggle-track off" id="cpu-toggle" onclick="toggleDonation()" role="button" tabindex="0" aria-label="Toggle CPU donation">
+          <div class="toggle-knob" id="toggle-knob">⚡</div>
+        </div>
+      </div>
+      <div id="toggle-label" style="font-size:1.5rem;font-weight:900;color:rgba(43,30,20,.35);margin-bottom:.25rem;transition:all .3s">Paused ❌</div>
+      <p id="toggle-sub" style="font-size:.875rem;color:rgba(140,90,42,.7)">Toggle on to start earning tokens.</p>
+    </div>
+
+    <!-- Stats -->
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:1rem;margin-bottom:1.5rem" class="grid-2" id="stats-grid">
+      <div class="stat-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><circle cx="12" cy="12" r="9"/><path d="M12 7v1m0 8v1m-3-5h6m-6 2h4"/></svg></div>
+          <span style="font-size:.65rem;color:rgba(140,90,42,.6);font-weight:700">CST</span>
+        </div>
+        <div style="font-size:1.5rem;font-weight:900;color:#2B1E14;transition:color .3s" id="token-display">8,741</div>
+        <div style="font-size:.7rem;color:#8C5A2A;font-weight:600;margin-top:2px">Tokens Earned</div>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8"/><line x1="9" y1="4" x2="9" y2="2"/><line x1="12" y1="4" x2="12" y2="2"/><line x1="15" y1="4" x2="15" y2="2"/><line x1="9" y1="22" x2="9" y2="20"/><line x1="12" y1="22" x2="12" y2="20"/><line x1="15" y1="22" x2="15" y2="20"/><line x1="4" y1="9" x2="2" y2="9"/><line x1="4" y1="12" x2="2" y2="12"/><line x1="4" y1="15" x2="2" y2="15"/><line x1="22" y1="9" x2="20" y2="9"/><line x1="22" y1="12" x2="20" y2="12"/><line x1="22" y1="15" x2="20" y2="15"/></svg></div>
+          <span style="font-size:.65rem;font-weight:700;color:rgba(140,90,42,.6)" id="cpu-live-badge">idle</span>
+        </div>
+        <div style="font-size:1.5rem;font-weight:900;color:#2B1E14" id="cpu-pct-display">0%</div>
+        <div style="font-size:.7rem;color:#8C5A2A;font-weight:600;margin-top:2px">CPU Usage</div>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+        </div>
+        <div style="font-size:1.5rem;font-weight:900;color:#2B1E14" id="tasks-done">5</div>
+        <div style="font-size:.7rem;color:#8C5A2A;font-weight:600;margin-top:2px">Tasks Done</div>
+      </div>
+      <div class="stat-card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:.75rem">
+          <div class="stat-icon"><svg viewBox="0 0 24 24" fill="#B77C12" width="14" height="14"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+        </div>
+        <div style="font-size:1.5rem;font-weight:900;color:#2B1E14">189h</div>
+        <div style="font-size:.7rem;color:#8C5A2A;font-weight:600;margin-top:2px">Hours Active</div>
+      </div>
+    </div>
+
+    <!-- CPU Ring + History -->
+    <div style="display:grid;grid-template-columns:1fr 2fr;gap:1.5rem;margin-bottom:1.5rem" class="grid-ring" id="ring-grid">
+      <div style="background:rgba(255,255,255,.6);border-radius:1.25rem;border:1px solid rgba(226,179,101,.3);padding:1.25rem;display:flex;flex-direction:column;align-items:center;justify-content:center">
+        <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.12em;margin-bottom:1rem">Live CPU</p>
+        <svg viewBox="0 0 100 100" width="112" height="112" style="transform:rotate(-90deg)">
+          <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(226,179,101,.2)" stroke-width="8"/>
+          <circle cx="50" cy="50" r="40" fill="none" stroke="#B77C12" stroke-width="8" stroke-linecap="round" id="cpu-ring" stroke-dasharray="0 251.2" class="cpu-ring-progress"/>
+          <text x="50" y="55" text-anchor="middle" fill="#B77C12" font-size="16" font-weight="700" style="transform:rotate(90deg);transform-origin:50px 50px" id="cpu-ring-text">0%</text>
+        </svg>
+        <p id="cpu-ring-status" style="font-size:.75rem;margin-top:.75rem;font-weight:600;color:rgba(140,90,42,.5)">○ Idle</p>
+      </div>
+      <div style="background:rgba(255,255,255,.6);border-radius:1.25rem;border:1px solid rgba(226,179,101,.3);padding:1.25rem;overflow:hidden">
+        <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.12em;margin-bottom:1rem">Contribution History</p>
+        <div style="overflow-x:auto">
+          <table style="width:100%;font-size:.8rem;border-collapse:collapse">
+            <thead>
+              <tr style="font-size:.65rem;color:rgba(140,90,42,.6);border-bottom:1px solid rgba(226,179,101,.3)">
+                <th style="text-align:left;padding-bottom:.5rem;font-weight:700">Task ID</th>
+                <th style="text-align:left;padding-bottom:.5rem;font-weight:700">Duration</th>
+                <th style="text-align:right;padding-bottom:.5rem;font-weight:700">Tokens</th>
+                <th style="text-align:right;padding-bottom:.5rem;font-weight:700">Time</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody">
+              <tr style="border-bottom:1px solid rgba(226,179,101,.2)"><td style="padding:.5rem 0;font-family:monospace;font-size:.75rem;color:#2B1E14">TSK-0091</td><td style="color:#8C5A2A;font-size:.75rem">4m 12s</td><td style="text-align:right"><span style="background:rgba(183,124,18,.15);color:#B77C12;font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:9999px">+42</span></td><td style="text-align:right;color:rgba(140,90,42,.6);font-size:.7rem">2 min ago</td></tr>
+              <tr style="border-bottom:1px solid rgba(226,179,101,.2)"><td style="padding:.5rem 0;font-family:monospace;font-size:.75rem;color:#2B1E14">TSK-0088</td><td style="color:#8C5A2A;font-size:.75rem">1m 55s</td><td style="text-align:right"><span style="background:rgba(183,124,18,.15);color:#B77C12;font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:9999px">+19</span></td><td style="text-align:right;color:rgba(140,90,42,.6);font-size:.7rem">18 min ago</td></tr>
+              <tr style="border-bottom:1px solid rgba(226,179,101,.2)"><td style="padding:.5rem 0;font-family:monospace;font-size:.75rem;color:#2B1E14">TSK-0085</td><td style="color:#8C5A2A;font-size:.75rem">7m 03s</td><td style="text-align:right"><span style="background:rgba(183,124,18,.15);color:#B77C12;font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:9999px">+71</span></td><td style="text-align:right;color:rgba(140,90,42,.6);font-size:.7rem">1h ago</td></tr>
+              <tr style="border-bottom:1px solid rgba(226,179,101,.2)"><td style="padding:.5rem 0;font-family:monospace;font-size:.75rem;color:#2B1E14">TSK-0081</td><td style="color:#8C5A2A;font-size:.75rem">2m 34s</td><td style="text-align:right"><span style="background:rgba(183,124,18,.15);color:#B77C12;font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:9999px">+25</span></td><td style="text-align:right;color:rgba(140,90,42,.6);font-size:.7rem">3h ago</td></tr>
+              <tr><td style="padding:.5rem 0;font-family:monospace;font-size:.75rem;color:#2B1E14">TSK-0077</td><td style="color:#8C5A2A;font-size:.75rem">9m 11s</td><td style="text-align:right"><span style="background:rgba(183,124,18,.15);color:#B77C12;font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:9999px">+92</span></td><td style="text-align:right;color:rgba(140,90,42,.6);font-size:.7rem">5h ago</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mini leaderboard -->
+    <div style="background:#2B1E14;border-radius:1.25rem;padding:1.25rem">
+      <p style="font-size:.65rem;font-weight:700;color:rgba(226,179,101,.6);text-transform:uppercase;letter-spacing:.12em;margin-bottom:1rem">Top Donors</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem">
+        <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.05);border-radius:.75rem;padding:.75rem;border:1px solid rgba(255,255,255,.1)"><span style="font-size:1.25rem">🥇</span><div><p style="font-size:.75rem;font-weight:800;color:#FAE9C8">0xNakamoto</p><p style="font-size:.7rem;color:rgba(250,233,200,.4)">14,820 CST</p></div></div>
+        <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.05);border-radius:.75rem;padding:.75rem;border:1px solid rgba(255,255,255,.1)"><span style="font-size:1.25rem">🥈</span><div><p style="font-size:.75rem;font-weight:800;color:#FAE9C8">vitalik.eth</p><p style="font-size:.7rem;color:rgba(250,233,200,.4)">11,290 CST</p></div></div>
+        <div style="display:flex;align-items:center;gap:.75rem;background:rgba(255,255,255,.05);border-radius:.75rem;padding:.75rem;border:2px solid rgba(183,124,18,.6)"><span style="font-size:1.25rem">🥉</span><div><p style="font-size:.75rem;font-weight:800;color:#B77C12">You (demo)</p><p style="font-size:.7rem;color:rgba(250,233,200,.4)">8,741 CST</p></div></div>
+      </div>
+    </div>
+
+    <!-- ── CPU CONTRIBUTION SLIDER ── -->
+    <div style="margin-top:1.5rem;background:rgba(255,255,255,.65);border-radius:1.25rem;border:1px solid rgba(226,179,101,.35);padding:1.5rem 1.75rem;box-shadow:0 2px 10px rgba(183,124,18,.07)">
+      <!-- Header row -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:.75rem">
+        <div>
+          <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.3rem">CPU Contribution</p>
+          <p style="font-size:.875rem;color:rgba(140,90,42,.7);line-height:1.5" id="slider-desc">
+            <span id="slider-pct-label" style="font-weight:800;color:#B77C12">50%</span> of your CPU will be used
+          </p>
+        </div>
+        <!-- Big badge -->
+        <div id="slider-badge" style="display:flex;align-items:center;gap:.5rem;background:#B77C12;color:#fff;border-radius:.875rem;padding:.5rem 1.1rem;min-width:80px;justify-content:center;box-shadow:0 6px 18px rgba(183,124,18,.3);transition:all .3s">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span id="slider-badge-val" style="font-size:1.1rem;font-weight:900;letter-spacing:-.02em">50%</span>
+        </div>
+      </div>
+
+      <!-- Slider track -->
+      <div style="position:relative;padding-bottom:1.75rem">
+        <!-- Filled track overlay (visual only) -->
+        <div style="position:relative;height:8px;margin-bottom:.6rem">
+          <div style="position:absolute;inset:0;background:rgba(226,179,101,.3);border-radius:9999px"></div>
+          <div id="slider-fill" style="position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,#B77C12,#E2B365);border-radius:9999px;transition:width .15s ease;pointer-events:none;width:50%"></div>
+          <input
+            type="range" min="0" max="100" step="5" value="50"
+            id="cpu-slider"
+            class="cpu-slider"
+            oninput="updateSlider(this.value)"
+            style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;margin:0"
+          />
+          <!-- Thumb visual (follows slider) -->
+          <div id="slider-thumb-visual" style="position:absolute;top:50%;transform:translate(-50%,-50%);left:50%;width:22px;height:22px;border-radius:9999px;background:#B77C12;box-shadow:0 0 0 4px rgba(183,124,18,.2),0 4px 12px rgba(183,124,18,.4);pointer-events:none;transition:left .15s ease"></div>
+        </div>
+
+        <!-- Step ticks + labels -->
+        <div style="display:flex;justify-content:space-between;padding:0 2px;margin-top:.5rem">
+          <div class="slider-label-tick" id="tick-0"><div class="tick-line"></div><span class="tick-text">0%</span></div>
+          <div class="slider-label-tick" id="tick-25"><div class="tick-line"></div><span class="tick-text">25%</span></div>
+          <div class="slider-label-tick active" id="tick-50"><div class="tick-line"></div><span class="tick-text">50%</span></div>
+          <div class="slider-label-tick" id="tick-75"><div class="tick-line"></div><span class="tick-text">75%</span></div>
+          <div class="slider-label-tick" id="tick-100"><div class="tick-line"></div><span class="tick-text">100%</span></div>
+        </div>
+      </div>
+
+      <!-- Preset quick-select buttons -->
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.1em;width:100%;margin-bottom:.1rem">Quick set</p>
+        <button onclick="setSlider(25)"  id="qbtn-25"  class="slider-qbtn" style="flex:1;min-width:60px;padding:.45rem .5rem;border-radius:.65rem;border:1.5px solid rgba(226,179,101,.45);background:transparent;color:#8C5A2A;font-size:.78rem;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit">25%</button>
+        <button onclick="setSlider(50)"  id="qbtn-50"  class="slider-qbtn active-qbtn" style="flex:1;min-width:60px;padding:.45rem .5rem;border-radius:.65rem;border:1.5px solid #B77C12;background:#B77C12;color:#fff;font-size:.78rem;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit">50%</button>
+        <button onclick="setSlider(75)"  id="qbtn-75"  class="slider-qbtn" style="flex:1;min-width:60px;padding:.45rem .5rem;border-radius:.65rem;border:1.5px solid rgba(226,179,101,.45);background:transparent;color:#8C5A2A;font-size:.78rem;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit">75%</button>
+        <button onclick="setSlider(100)" id="qbtn-100" class="slider-qbtn" style="flex:1;min-width:60px;padding:.45rem .5rem;border-radius:.65rem;border:1.5px solid rgba(226,179,101,.45);background:transparent;color:#8C5A2A;font-size:.78rem;font-weight:700;cursor:pointer;transition:all .2s;font-family:inherit">100%</button>
+      </div>
+
+      <!-- Estimated tokens per hour -->
+      <div style="margin-top:1.1rem;display:flex;align-items:center;gap:.6rem;background:rgba(183,124,18,.09);border:1px solid rgba(183,124,18,.22);border-radius:.75rem;padding:.7rem 1rem">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="16" height="16"><circle cx="12" cy="12" r="9"/><path d="M12 7v1m0 8v1m-3-5h6m-6 2h4"/></svg>
+        <p style="font-size:.78rem;color:#8C5A2A">
+          Earning estimate: <strong id="slider-earn-rate" style="color:#B77C12">~6 CST/hr</strong> at current setting
+        </p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════════════════ TASKS ════════════════════════ -->
+<div id="page-tasks" class="page" style="min-height:100vh;background:#FAE9C8;padding:5.5rem 1rem 3rem">
+  <div style="max-width:42rem;margin:0 auto">
+    <div style="margin-bottom:1.75rem">
+      <h1 style="font-size:1.5rem;font-weight:900;color:#2B1E14">Submit a Task</h1>
+      <p style="font-size:.875rem;color:#8C5A2A">Distribute your workload across the network.</p>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem">
+      <div style="background:#2B1E14;border-radius:1.25rem;padding:1rem 1.25rem">
+        <p style="font-size:.65rem;color:rgba(226,179,101,.6);font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.25rem">Your Balance</p>
+        <p style="font-size:1.5rem;font-weight:900;color:#B77C12">8,741 <span style="font-size:.8rem;font-weight:700">CST</span></p>
+      </div>
+      <div class="stat-card">
+        <p style="font-size:.65rem;color:#8C5A2A;font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.25rem">Queue Position</p>
+        <p style="font-size:1.5rem;font-weight:900;color:#2B1E14">#12 <span style="font-size:.8rem;font-weight:400;color:#8C5A2A">in line</span></p>
+      </div>
+    </div>
+    <div style="background:rgba(255,255,255,.7);border-radius:1.25rem;border:1px solid rgba(226,179,101,.3);padding:1.5rem">
+      <div style="margin-bottom:1.25rem">
+        <label style="display:block;font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem">Task Type</label>
+        <div style="display:flex;gap:.5rem">
+          <button class="type-btn active" onclick="selectType('text',this)">📝 Text</button>
+          <button class="type-btn" onclick="selectType('code',this)">💻 Code</button>
+          <button class="type-btn" onclick="selectType('file',this)">📁 File</button>
+        </div>
+      </div>
+      <div style="margin-bottom:1.25rem">
+        <label style="display:block;font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem" id="content-label">Task Content</label>
+        <div id="text-input-wrap">
+          <textarea id="task-content" rows="5" placeholder="Describe the computation you need..." style="width:100%;background:rgba(250,233,200,.6);border:1px solid rgba(226,179,101,.5);border-radius:.75rem;padding:.75rem 1rem;font-size:.85rem;color:#2B1E14;font-family:monospace;resize:none;outline:none;transition:border .2s;box-sizing:border-box" onfocus="this.style.borderColor='#B77C12'" onblur="this.style.borderColor='rgba(226,179,101,.5)'"></textarea>
+        </div>
+        <div id="file-drop" style="display:none;border:2px dashed rgba(226,179,101,.5);border-radius:.75rem;padding:2rem;text-align:center;cursor:pointer;transition:border .2s" onmouseover="this.style.borderColor='rgba(183,124,18,.6)'" onmouseout="this.style.borderColor='rgba(226,179,101,.5)'">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#B77C12" stroke-width="1.8" width="24" height="24" style="margin:0 auto .5rem"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
+          <p style="font-size:.875rem;color:#8C5A2A">Drop a file or <span style="color:#B77C12;font-weight:700">browse</span></p>
+          <p style="font-size:.75rem;color:rgba(140,90,42,.5);margin-top:.25rem">Max 10MB</p>
+        </div>
+      </div>
+      <div style="margin-bottom:1.5rem">
+        <label style="display:block;font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.5rem">Priority</label>
+        <div style="display:flex;gap:.5rem">
+          <button class="prio-btn" onclick="selectPrio('low',.7,this)">Low <span style="opacity:.7">0.7×</span></button>
+          <button class="prio-btn active" onclick="selectPrio('normal',1,this)">Normal <span style="opacity:.7">1×</span></button>
+          <button class="prio-btn" onclick="selectPrio('high',1.8,this)">High <span style="opacity:.7">1.8×</span></button>
+        </div>
+      </div>
+      <div style="background:rgba(183,124,18,.1);border:1px solid rgba(183,124,18,.3);border-radius:.75rem;padding:1rem;margin-bottom:1.25rem;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <p style="font-size:.75rem;color:#8C5A2A;font-weight:700">Estimated Cost</p>
+          <p style="font-size:.7rem;color:rgba(140,90,42,.6);margin-top:2px" id="cost-desc">text · normal priority</p>
+        </div>
+        <p style="font-size:1.5rem;font-weight:900;color:#B77C12" id="cost-display">30 <span style="font-size:.8rem;font-weight:700">CST</span></p>
+      </div>
+      <button id="submit-btn" onclick="submitTask()" style="width:100%;padding:.875rem;background:#2B1E14;color:#FAE9C8;font-weight:800;border-radius:.75rem;border:none;cursor:pointer;font-size:.875rem;font-family:inherit;transition:all .2s" onmouseover="this.style.background='#B77C12';this.style.boxShadow='0 10px 30px rgba(183,124,18,.3)'" onmouseout="this.style.background='#2B1E14';this.style.boxShadow='none'">Submit Task · 30 CST</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════ WALLET ════════════════════════ -->
+<div id="page-wallet" class="page" style="min-height:100vh;background:#FAE9C8;padding:5.5rem 1rem 3rem">
+  <div style="max-width:38rem;margin:0 auto">
+    <div style="margin-bottom:1.75rem">
+      <h1 style="font-size:1.5rem;font-weight:900;color:#2B1E14">Token Wallet</h1>
+      <p style="font-size:.875rem;color:#8C5A2A">Manage your CST balance and transactions.</p>
+    </div>
+    <div style="background:#2B1E14;border-radius:1.5rem;padding:2rem;margin-bottom:1.5rem;position:relative;overflow:hidden">
+      <div style="position:absolute;top:0;right:0;width:12rem;height:12rem;border-radius:9999px;background:rgba(183,124,18,.1);transform:translate(3rem,-3rem)"></div>
+      <div style="position:absolute;bottom:0;left:0;width:8rem;height:8rem;border-radius:9999px;background:rgba(226,179,101,.05);transform:translate(-2rem,2rem)"></div>
+      <div style="position:relative">
+        <p style="font-size:.65rem;color:rgba(226,179,101,.6);font-weight:700;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.25rem">Total Balance</p>
+        <p style="font-size:3rem;font-weight:900;color:#B77C12;line-height:1">8,741</p>
+        <p style="font-size:.875rem;color:rgba(250,233,200,.4);margin-bottom:1.5rem">ComputeShare Tokens (CST)</p>
+        <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+          <button onclick="toggleBuyPanel()" style="display:inline-flex;align-items:center;gap:6px;padding:.5rem 1rem;background:#B77C12;color:#fff;font-weight:800;border-radius:.75rem;border:none;cursor:pointer;font-size:.75rem;font-family:inherit;transition:background .2s" onmouseover="this.style.background='#E2B365'" onmouseout="this.style.background='#B77C12'">+ Buy Tokens</button>
+          <button style="position:relative;display:inline-flex;align-items:center;gap:6px;padding:.5rem 1rem;background:rgba(255,255,255,.1);color:rgba(250,233,200,.7);font-weight:800;border-radius:.75rem;border:none;cursor:not-allowed;font-size:.75rem;font-family:inherit">
+            Withdraw
+            <span style="position:absolute;top:-8px;right:-8px;background:#B77C12;color:#fff;font-size:9px;font-weight:800;padding:2px 5px;border-radius:9999px">SOON</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div id="buy-panel" style="display:none;background:rgba(255,255,255,.85);border:1px solid rgba(226,179,101,.4);border-radius:1.25rem;padding:1.25rem;margin-bottom:1.5rem">
+      <p style="font-weight:800;color:#2B1E14;margin-bottom:1rem;font-size:.9rem">Buy Tokens — Powered by Razorpay</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-bottom:1rem">
+        <div class="card-hover" style="padding:.75rem;border:2px solid rgba(226,179,101,.4);border-radius:.75rem;text-align:center;cursor:pointer;transition:border .2s" onmouseover="this.style.borderColor='#B77C12'" onmouseout="this.style.borderColor='rgba(226,179,101,.4)'"><p style="font-size:.85rem;font-weight:900;color:#2B1E14">100 CST</p><p style="font-size:.75rem;color:#8C5A2A">₹49</p></div>
+        <div class="card-hover" style="padding:.75rem;border:2px solid rgba(226,179,101,.4);border-radius:.75rem;text-align:center;cursor:pointer;transition:border .2s" onmouseover="this.style.borderColor='#B77C12'" onmouseout="this.style.borderColor='rgba(226,179,101,.4)'"><p style="font-size:.85rem;font-weight:900;color:#2B1E14">500 CST</p><p style="font-size:.75rem;color:#8C5A2A">₹199</p></div>
+        <div class="card-hover" style="padding:.75rem;border:2px solid rgba(226,179,101,.4);border-radius:.75rem;text-align:center;cursor:pointer;transition:border .2s" onmouseover="this.style.borderColor='#B77C12'" onmouseout="this.style.borderColor='rgba(226,179,101,.4)'"><p style="font-size:.85rem;font-weight:900;color:#2B1E14">2000 CST</p><p style="font-size:.75rem;color:#8C5A2A">₹699</p></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:.5rem;background:rgba(43,30,20,.05);border-radius:.75rem;padding:.75rem;margin-bottom:.75rem">
+        <span style="font-size:1.1rem">💳</span>
+        <input placeholder="Card number" style="flex:1;background:transparent;border:none;outline:none;font-size:.85rem;color:#2B1E14;font-family:inherit"/>
+      </div>
+      <button style="width:100%;padding:.75rem;background:#07a56d;color:#fff;font-weight:800;border-radius:.75rem;border:none;cursor:pointer;font-size:.85rem;font-family:inherit;transition:background .2s" onmouseover="this.style.background='#059963'" onmouseout="this.style.background='#07a56d'">Pay with Razorpay</button>
+      <p style="text-align:center;font-size:.7rem;color:rgba(140,90,42,.5);margin-top:.5rem">🔒 Secure payment · Mock demo only</p>
+    </div>
+    <div style="background:rgba(255,255,255,.7);border-radius:1.25rem;border:1px solid rgba(226,179,101,.3);padding:1.25rem">
+      <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.12em;margin-bottom:1rem">Transaction History</p>
+      <div id="tx-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════ LEADERBOARD ════════════════════════ -->
+<div id="page-leaderboard" class="page" style="min-height:100vh;background:#FAE9C8;padding:5.5rem 1rem 3rem">
+  <div style="max-width:46rem;margin:0 auto">
+    <div style="margin-bottom:1.75rem">
+      <h1 style="font-size:1.5rem;font-weight:900;color:#2B1E14">Leaderboard</h1>
+      <p style="font-size:.875rem;color:#8C5A2A">Top CPU donors of all time.</p>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:2rem">
+      <div style="background:#2B1E14;border-radius:1.25rem;padding:1.25rem;text-align:center;border:2px solid #2B1E14"><div style="font-size:2rem;margin-bottom:.5rem">🥇</div><p style="font-size:.75rem;font-weight:900;color:#FAE9C8;margin-bottom:.25rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">0xNakamoto</p><p style="font-size:1.1rem;font-weight:900;color:#B77C12">14.8k</p><p style="font-size:.7rem;color:rgba(250,233,200,.5)">CST</p></div>
+      <div style="background:rgba(255,255,255,.6);border-radius:1.25rem;padding:1.25rem;text-align:center;border:2px solid rgba(226,179,101,.3)"><div style="font-size:2rem;margin-bottom:.5rem">🥈</div><p style="font-size:.75rem;font-weight:900;color:#2B1E14;margin-bottom:.25rem">vitalik.eth</p><p style="font-size:1.1rem;font-weight:900;color:#2B1E14">11.3k</p><p style="font-size:.7rem;color:rgba(140,90,42,.6)">CST</p></div>
+      <div style="background:rgba(183,124,18,.2);border-radius:1.25rem;padding:1.25rem;text-align:center;border:2px solid #B77C12"><div style="font-size:2rem;margin-bottom:.5rem">🥉</div><p style="font-size:.75rem;font-weight:900;color:#B77C12;margin-bottom:.25rem">You (demo)</p><p style="font-size:1.1rem;font-weight:900;color:#2B1E14">8.7k</p><p style="font-size:.7rem;color:rgba(140,90,42,.6)">CST</p></div>
+    </div>
+    <div style="background:rgba(255,255,255,.7);border-radius:1.25rem;border:1px solid rgba(226,179,101,.3);overflow:hidden;margin-bottom:1.5rem">
+      <table style="width:100%;border-collapse:collapse">
+        <thead style="background:rgba(43,30,20,.05)">
+          <tr style="font-size:.65rem;color:rgba(140,90,42,.6);border-bottom:1px solid rgba(226,179,101,.3)">
+            <th style="text-align:left;padding:.75rem 1.25rem;font-weight:700">Rank</th>
+            <th style="text-align:left;padding:.75rem 1.25rem;font-weight:700">Donor</th>
+            <th style="text-align:center;padding:.75rem .75rem;font-weight:700">Tier</th>
+            <th style="text-align:right;padding:.75rem 1.25rem;font-weight:700">Hours</th>
+            <th style="text-align:right;padding:.75rem 1.25rem;font-weight:700">Tokens</th>
+          </tr>
+        </thead>
+        <tbody id="lb-tbody"></tbody>
+      </table>
+    </div>
+    <div style="background:rgba(255,255,255,.6);border-radius:1.25rem;border:1px solid rgba(226,179,101,.3);padding:1.25rem">
+      <p style="font-size:.65rem;font-weight:700;color:#8C5A2A;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.75rem">Tier Requirements</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem">
+        <div style="text-align:center;padding:.75rem;background:rgba(250,233,200,.6);border-radius:.75rem"><div style="font-size:1.5rem;margin-bottom:.25rem">🥉</div><p style="font-size:.75rem;font-weight:800;color:#2B1E14">Bronze</p><p style="font-size:.65rem;color:rgba(140,90,42,.6)">0–5,000 CST</p></div>
+        <div style="text-align:center;padding:.75rem;background:rgba(250,233,200,.6);border-radius:.75rem"><div style="font-size:1.5rem;margin-bottom:.25rem">🥈</div><p style="font-size:.75rem;font-weight:800;color:#2B1E14">Silver</p><p style="font-size:.65rem;color:rgba(140,90,42,.6)">5,001–10,000 CST</p></div>
+        <div style="text-align:center;padding:.75rem;background:rgba(250,233,200,.6);border-radius:.75rem"><div style="font-size:1.5rem;margin-bottom:.25rem">🥇</div><p style="font-size:.75rem;font-weight:800;color:#2B1E14">Gold</p><p style="font-size:.65rem;color:rgba(140,90,42,.6)">10,001+ CST</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════ JAVASCRIPT ════════════════════════ -->
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+// State
+let donating=false, tokens=8741, cpuPct=0, tickInterval=null, tickCount=0;
+let taskType='text', taskPrioMul=1, tasksDone=5;
+const COST={text:30,code:60,file:100};
+
+const LEADERBOARD=[
+  {rank:1,name:"0xNakamoto",tokens:14820,hours:312,tier:"gold",you:false},
+  {rank:2,name:"vitalik.eth",tokens:11290,hours:248,tier:"gold",you:false},
+  {rank:3,name:"You (demo)",tokens:8741,hours:189,tier:"silver",you:true},
+  {rank:4,name:"SatoshiNode",tokens:7233,hours:154,tier:"silver",you:false},
+  {rank:5,name:"CPUking99",tokens:5120,hours:108,tier:"silver",you:false},
+  {rank:6,name:"hashpunter",tokens:3890,hours:82,tier:"bronze",you:false},
+  {rank:7,name:"node_lurker",tokens:2741,hours:58,tier:"bronze",you:false},
+  {rank:8,name:"pi_farmer",tokens:1920,hours:41,tier:"bronze",you:false},
+];
+const TRANSACTIONS=[
+  {type:"earned",desc:"Task TSK-0091 completed",amount:42,time:"2m ago"},
+  {type:"earned",desc:"Task TSK-0088 completed",amount:19,time:"18m ago"},
+  {type:"spent",desc:"Task submitted: ML inference",amount:-80,time:"2h ago"},
+  {type:"earned",desc:"Task TSK-0085 completed",amount:71,time:"1h ago"},
+  {type:"bought",desc:"Token purchase",amount:500,time:"1d ago"},
+  {type:"spent",desc:"Task submitted: data parse",amount:-30,time:"2d ago"},
+];
+
+// ── Auth State ────────────────────────────────────────────────────────────────
+let currentUser = null;
+
+// Navigation (auth-aware)
+function navigate(page){
+  const protected_pages=['dashboard','tasks','wallet','leaderboard'];
+  if(protected_pages.includes(page) && !currentUser){
+    // Not logged in — send to auth
+    page='auth';
+    switchAuthTab('login');
+    showAuthError('Please sign in to access that page.');
+  }
+  // Hide all pages
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  // Show target page
+  const target=document.getElementById('page-'+page);
+  if(target) target.classList.add('active');
+  // Update nav link highlights
+  document.querySelectorAll('[data-page]').forEach(l=>l.classList.toggle('active',l.dataset.page===page));
+  // Close dropdown if open
+  const dd=document.getElementById('user-dropdown');
+  if(dd) dd.style.display='none';
+  window.scrollTo(0,0);
+}
+
+function switchAuthTab(tab){
+  const lf=document.getElementById('login-form');
+  const sf=document.getElementById('signup-form');
+  const ff=document.getElementById('forgot-form');
+  if(lf) lf.style.display = tab==='login'  ? 'block':'none';
+  if(sf) sf.style.display = tab==='signup' ? 'block':'none';
+  if(ff) ff.style.display = 'none';
+  const tl=document.getElementById('tab-login');
+  const ts=document.getElementById('tab-signup');
+  if(tl) tl.classList.toggle('active', tab==='login');
+  if(ts) ts.classList.toggle('active', tab==='signup');
+  hideAuthError();
+  const f=document.getElementById(tab+'-form');
+  if(f){f.classList.remove('auth-form'); void f.offsetWidth; f.classList.add('auth-form');}
+}
+
+function showForgot(){
+  const lf=document.getElementById('login-form');
+  const sf=document.getElementById('signup-form');
+  const ff=document.getElementById('forgot-form');
+  if(lf) lf.style.display='none';
+  if(sf) sf.style.display='none';
+  if(ff) ff.style.display='block';
+  ['tab-login','tab-signup'].forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('active');});
+  hideAuthError();
+}
+function showLogin(){ switchAuthTab('login'); }
+
+function showAuthError(msg){
+  const el=document.getElementById('auth-error');
+  const et=document.getElementById('auth-error-text');
+  if(!el||!et) return;
+  et.textContent=msg;
+  el.style.display='flex';
+  el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake');
+}
+function hideAuthError(){
+  const el=document.getElementById('auth-error');
+  if(el) el.style.display='none';
+}
+
+function setButtonLoading(id,loading){
+  const btn=document.getElementById(id);
+  if(!btn) return;
+  btn.disabled=loading;
+  btn.textContent=loading?'Please wait…':(id==='login-submit-btn'?'Sign In →':'Create Account →');
+}
+
+function handleLogin(){
+  const email=document.getElementById('login-email').value.trim();
+  const pwd=document.getElementById('login-password').value;
+  hideAuthError();
+  if(!email||!isValidEmail(email)){showAuthError('Enter a valid email address.');return;}
+  if(!pwd||pwd.length<6){showAuthError('Password must be at least 6 characters.');return;}
+  setButtonLoading('login-submit-btn',true);
+  setTimeout(()=>{
+    setButtonLoading('login-submit-btn',false);
+    const name=email.split('@')[0];
+    loginSuccess({name:capitalize(name),email,initials:getInitials(name)});
+  },1000);
+}
+
+function handleSignup(){
+  const fname=document.getElementById('signup-fname').value.trim();
+  const lname=document.getElementById('signup-lname').value.trim();
+  const email=document.getElementById('signup-email').value.trim();
+  const pwd=document.getElementById('signup-password').value;
+  const confirm=document.getElementById('signup-confirm').value;
+  const terms=document.getElementById('signup-terms').checked;
+  hideAuthError();
+  if(!fname||!lname){showAuthError('Please enter your full name.');return;}
+  if(!email||!isValidEmail(email)){showAuthError('Enter a valid email address.');return;}
+  if(!pwd||pwd.length<6){showAuthError('Password must be at least 6 characters.');return;}
+  if(pwd!==confirm){showAuthError('Passwords do not match.');return;}
+  if(!terms){showAuthError('Please accept the Terms of Service.');return;}
+  setButtonLoading('signup-submit-btn',true);
+  setTimeout(()=>{
+    setButtonLoading('signup-submit-btn',false);
+    loginSuccess({
+      name:capitalize(fname)+' '+capitalize(lname),
+      email,
+      initials:(fname[0]+lname[0]).toUpperCase()
+    });
+  },1000);
+}
+
+function handleSocialLogin(provider){
+  hideAuthError();
+  const mock={
+    Google:{name:'Alex Johnson',email:'alex.j@gmail.com',initials:'AJ'},
+    GitHub:{name:'Dev User',email:'dev@github.com',initials:'DU'}
+  };
+  loginSuccess(mock[provider]);
+}
+
+function handleForgot(){
+  const email=document.getElementById('forgot-email').value.trim();
+  if(!email||!isValidEmail(email)){showAuthError('Enter a valid email address.');return;}
+  const fs=document.getElementById('forgot-success');
+  if(fs) fs.style.display='block';
+  setTimeout(()=>{
+    if(fs) fs.style.display='none';
+    switchAuthTab('login');
+  },2500);
+}
+
+function loginSuccess(user){
+  // 1. Store user
+  currentUser=user;
+
+  // 2. Swap nav: hide Sign In button, show avatar
+  const loginBtn=document.getElementById('nav-login-btn');
+  const avatarEl=document.getElementById('nav-avatar');
+  if(loginBtn) loginBtn.style.display='none';
+  if(avatarEl) avatarEl.style.display='flex';
+
+  // 3. Fill avatar details
+  const initEl=document.getElementById('nav-avatar-initials');
+  const nameEl=document.getElementById('nav-username-display');
+  const ddName=document.getElementById('dropdown-name');
+  const ddEmail=document.getElementById('dropdown-email');
+  if(initEl) initEl.textContent=user.initials;
+  if(nameEl) nameEl.textContent=user.name.split(' ')[0];
+  if(ddName) ddName.textContent=user.name;
+  if(ddEmail) ddEmail.textContent=user.email;
+
+  // 4. Update mobile menu
+  const mab=document.getElementById('mobile-auth-btn');
+  const mlb=document.getElementById('mobile-logout-btn');
+  if(mab) mab.style.display='none';
+  if(mlb) mlb.style.display='flex';
+
+  // 5. Navigate to dashboard (currentUser is set so guard passes)
+  navigate('dashboard');
+}
+
+function logOut(){
+  currentUser=null;
+  if(donating) toggleDonation();
+
+  // Restore nav
+  const loginBtn=document.getElementById('nav-login-btn');
+  const avatarEl=document.getElementById('nav-avatar');
+  const dd=document.getElementById('user-dropdown');
+  if(loginBtn) loginBtn.style.display='flex';
+  if(avatarEl) avatarEl.style.display='none';
+  if(dd) dd.style.display='none';
+
+  // Mobile
+  const mab=document.getElementById('mobile-auth-btn');
+  const mlb=document.getElementById('mobile-logout-btn');
+  if(mab) mab.style.display='flex';
+  if(mlb) mlb.style.display='none';
+
+  // Go to auth page directly (bypass navigate guard)
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  const ap=document.getElementById('page-auth');
+  if(ap) ap.classList.add('active');
+  switchAuthTab('login');
+  window.scrollTo(0,0);
+}
+
+function toggleUserMenu(){
+  const d=document.getElementById('user-dropdown');
+  if(d) d.style.display=d.style.display==='none'||d.style.display===''?'block':'none';
+}
+document.addEventListener('click',e=>{
+  const area=document.getElementById('nav-user-area');
+  const dd=document.getElementById('user-dropdown');
+  if(area&&dd&&!area.contains(e.target)) dd.style.display='none';
+});
+
+function checkStrength(pwd){
+  let s=0;
+  if(pwd.length>=8)s++;
+  if(/[A-Z]/.test(pwd))s++;
+  if(/[0-9]/.test(pwd))s++;
+  if(/[^A-Za-z0-9]/.test(pwd))s++;
+  const colors=['rgba(226,179,101,.2)','#ef4444','#f97316','#E2B365','#22c55e'];
+  const labels=['Enter a password','Too weak','Fair','Good','Strong 💪'];
+  const lcolors=['rgba(140,90,42,.6)','#ef4444','#f97316','#B77C12','#16a34a'];
+  for(let i=1;i<=4;i++){const b=document.getElementById('sb'+i);if(b)b.style.background=i<=s?colors[s]:colors[0];}
+  const sl=document.getElementById('strength-label');
+  if(sl){sl.textContent=labels[s];sl.style.color=lcolors[s];}
+}
+
+function togglePwd(inputId,btn){
+  const inp=document.getElementById(inputId);
+  if(!inp) return;
+  const show=inp.type==='password';
+  inp.type=show?'text':'password';
+  btn.innerHTML=show
+    ?'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'
+    :'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+}
+
+function isValidEmail(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);}
+function capitalize(s){return s.charAt(0).toUpperCase()+s.slice(1);}
+function getInitials(name){
+  const p=name.split(/[._\-]/);
+  return p.length>1?(p[0][0]+p[1][0]).toUpperCase():name.slice(0,2).toUpperCase();
+}
+
+// Toggle
+function toggleDonation(){
+  donating=!donating;
+  const track=document.getElementById('cpu-toggle');
+  const particles=document.getElementById('toggle-particles');
+  const card=document.getElementById('toggle-card');
+  const label=document.getElementById('toggle-label');
+  const sub=document.getElementById('toggle-sub');
+  track.className='toggle-track '+(donating?'on':'off');
+  particles.style.display=donating?'block':'none';
+  if(donating){
+    card.style.background='linear-gradient(135deg,rgba(183,124,18,.2),rgba(226,179,101,.1))';
+    card.style.borderColor='#B77C12';
+    label.textContent='Contributing CPU ⚡';
+    label.style.color='#B77C12';
+    sub.textContent='Your browser is actively processing distributed tasks.';
+    startTick();
+  } else {
+    card.style.background='rgba(255,255,255,.6)';
+    card.style.borderColor='rgba(226,179,101,.4)';
+    label.textContent='Paused ❌';
+    label.style.color='rgba(43,30,20,.35)';
+    sub.textContent='Toggle on to start earning tokens.';
+    stopTick();
+  }
+}
+
+function startTick(){
+  tickCount=0;
+  tickInterval=setInterval(()=>{
+    tickCount++;
+    const noise=Math.sin(tickCount*.3)*15+Math.random()*10;
+const sliderVal = parseInt(document.getElementById('cpu-slider')?.value || 50);
+cpuPct = sliderVal;
+    updateCPU(cpuPct);
+    if(tickCount%8===0){
+      const earned=Math.floor(Math.random()*12)+5;
+      tokens+=earned;
+      updateTokens();
+      if(tickCount%24===0) addRow(earned);
+    }
+  },500);
+}
+function stopTick(){
+  clearInterval(tickInterval);
+  tickInterval=null;
+  cpuPct=0;
+  updateCPU(0);
+}
+function updateCPU(pct){
+  const circ=2*Math.PI*40;
+  const dash=(pct/100)*circ;
+  document.getElementById('cpu-ring').setAttribute('stroke-dasharray',`${dash} ${circ}`);
+  document.getElementById('cpu-ring-text').textContent=pct+'%';
+  document.getElementById('cpu-pct-display').textContent=pct+'%';
+  document.getElementById('cpu-ring-status').textContent=donating?'● Processing tasks...':'○ Idle';
+  document.getElementById('cpu-ring-status').style.color=donating?'#B77C12':'rgba(140,90,42,.5)';
+  document.getElementById('cpu-live-badge').textContent=donating?'LIVE':'idle';
+}
+function updateTokens(){
+  const el=document.getElementById('token-display');
+  el.textContent=tokens.toLocaleString();
+  el.classList.remove('token-pop');
+  void el.offsetWidth;
+  el.classList.add('token-pop');
+  el.style.color='#B77C12';
+  setTimeout(()=>{el.style.color='#2B1E14';},600);
+}
+function addRow(earned){
+  const id='TSK-'+String(Math.floor(Math.random()*9000)+1000);
+  const dur=`${Math.floor(Math.random()*8)+1}m ${Math.floor(Math.random()*59)}s`;
+  tasksDone++;
+  document.getElementById('tasks-done').textContent=tasksDone;
+  const tbody=document.getElementById('history-tbody');
+  const row=document.createElement('tr');
+  row.style.cssText='border-bottom:1px solid rgba(226,179,101,.2);animation:fadeIn .3s ease';
+  row.innerHTML=`<td style="padding:.5rem 0;font-family:monospace;font-size:.75rem;color:#2B1E14">${id}</td><td style="color:#8C5A2A;font-size:.75rem">${dur}</td><td style="text-align:right"><span style="background:rgba(183,124,18,.15);color:#B77C12;font-size:.65rem;font-weight:800;padding:2px 8px;border-radius:9999px">+${earned*3}</span></td><td style="text-align:right;color:rgba(140,90,42,.6);font-size:.7rem">just now</td>`;
+  tbody.insertBefore(row,tbody.firstChild);
+  if(tbody.children.length>5) tbody.removeChild(tbody.lastChild);
+}
+
+// Task page
+function selectType(type,btn){
+  taskType=type;
+  document.querySelectorAll('.type-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('text-input-wrap').style.display=type==='file'?'none':'block';
+  document.getElementById('file-drop').style.display=type==='file'?'block':'none';
+  document.getElementById('content-label').textContent=type==='file'?'Upload File':'Task Content';
+  if(type==='code') document.getElementById('task-content').placeholder='# Python, JS, or any pseudocode\ndef my_task(): ...';
+  else document.getElementById('task-content').placeholder='Describe the computation you need...';
+  updateCost();
+}
+function selectPrio(prio,mul,btn){
+  taskPrioMul=mul;
+  document.querySelectorAll('.prio-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  updateCost();
+}
+function updateCost(){
+  const cost=Math.round(COST[taskType]*taskPrioMul);
+  const prioLabel=taskPrioMul===.7?'low':taskPrioMul===1?'normal':'high';
+  document.getElementById('cost-display').innerHTML=`${cost} <span style="font-size:.8rem;font-weight:700">CST</span>`;
+  document.getElementById('cost-desc').textContent=`${taskType} · ${prioLabel} priority`;
+  document.getElementById('submit-btn').textContent=`Submit Task · ${cost} CST`;
+}
+function submitTask(){
+  const btn=document.getElementById('submit-btn');
+  btn.textContent='✓ Task Queued Successfully!';
+  btn.style.background='#22c55e';
+  btn.style.boxShadow='none';
+  btn.onmouseover=null; btn.onmouseout=null;
+  setTimeout(()=>{
+    updateCost();
+    btn.style.background='#2B1E14';
+    btn.onmouseover=function(){this.style.background='#B77C12';this.style.boxShadow='0 10px 30px rgba(183,124,18,.3)';};
+    btn.onmouseout=function(){this.style.background='#2B1E14';this.style.boxShadow='none';};
+  },3000);
+}
+
+// Wallet
+function toggleBuyPanel(){
+  const p=document.getElementById('buy-panel');
+  p.style.display=p.style.display==='none'?'block':'none';
+}
+function renderTx(){
+  const txColors={earned:{bg:'rgba(22,163,74,.1)',fg:'#16a34a',icon:'↑'},spent:{bg:'rgba(239,68,68,.1)',fg:'#ef4444',icon:'↓'},bought:{bg:'rgba(183,124,18,.15)',fg:'#B77C12',icon:'+'}};
+  document.getElementById('tx-list').innerHTML=TRANSACTIONS.map(tx=>{
+    const c=txColors[tx.type];
+    return `<div style="display:flex;align-items:center;gap:.75rem;padding:.625rem 0;border-bottom:1px solid rgba(226,179,101,.2)">
+      <div style="width:32px;height:32px;flex-shrink:0;border-radius:.625rem;background:${c.bg};color:${c.fg};display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:900">${c.icon}</div>
+      <div style="flex:1;min-width:0"><p style="font-size:.85rem;font-weight:600;color:#2B1E14;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${tx.desc}</p><p style="font-size:.7rem;color:rgba(140,90,42,.6)">${tx.time}</p></div>
+      <span style="font-size:.85rem;font-weight:800;color:${tx.amount>0?'#16a34a':'#ef4444'}">${tx.amount>0?'+':''}${tx.amount} CST</span>
+    </div>`;
+  }).join('');
+}
+
+// Leaderboard
+const TIER={gold:{l:'Gold',e:'🥇',bg:'rgba(253,224,71,.15)',fg:'#92400e',bd:'rgba(253,224,71,.3)'},silver:{l:'Silver',e:'🥈',bg:'rgba(148,163,184,.15)',fg:'#475569',bd:'rgba(148,163,184,.3)'},bronze:{l:'Bronze',e:'🥉',bg:'rgba(253,186,116,.15)',fg:'#9a3412',bd:'rgba(253,186,116,.3)'}};
+function renderLB(){
+  document.getElementById('lb-tbody').innerHTML=LEADERBOARD.map(u=>{
+    const t=TIER[u.tier];
+    const rowBg=u.you?'rgba(183,124,18,.1)':'transparent';
+    return `<tr style="border-bottom:1px solid rgba(226,179,101,.2);background:${rowBg};transition:background .15s" onmouseover="this.style.background='rgba(183,124,18,.06)'" onmouseout="this.style.background='${rowBg}'">
+      <td style="padding:.875rem 1.25rem"><span style="font-weight:900;font-size:.875rem;color:${u.rank<=3?'#B77C12':'#8C5A2A'}">#${u.rank}</span></td>
+      <td style="padding:.875rem 1.25rem"><span style="font-size:.875rem;font-weight:700;color:${u.you?'#B77C12':'#2B1E14'}">${u.name}</span>${u.you?'<span style="margin-left:8px;font-size:.65rem;background:#B77C12;color:#fff;padding:2px 6px;border-radius:9999px;font-weight:800">YOU</span>':''}</td>
+      <td style="padding:.875rem .75rem;text-align:center"><span style="font-size:.7rem;font-weight:800;padding:3px 8px;border-radius:9999px;border:1px solid ${t.bd};background:${t.bg};color:${t.fg}">${t.e} ${t.l}</span></td>
+      <td style="padding:.875rem 1.25rem;text-align:right;font-size:.875rem;color:#8C5A2A">${u.hours}h</td>
+      <td style="padding:.875rem 1.25rem;text-align:right"><span style="font-size:.875rem;font-weight:900;color:#2B1E14">${u.tokens.toLocaleString()}</span><span style="font-size:.7rem;color:rgba(140,90,42,.6);margin-left:2px">CST</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ── CPU Contribution Slider ───────────────────────────────────────────────────
+function updateSlider(val){
+  val=parseInt(val);
+  // Fill gradient bar
+  document.getElementById('slider-fill').style.width=val+'%';
+  // Thumb visual position
+  document.getElementById('slider-thumb-visual').style.left=val+'%';
+  // Text labels
+  document.getElementById('slider-pct-label').textContent=val+'%';
+  document.getElementById('slider-badge-val').textContent=val+'%';
+  // Badge accent changes at high usage
+  document.getElementById('slider-badge').style.background=val>=75?'#8C5A2A':'#B77C12';
+  // Tick mark highlights — activate nearest tick
+  ['0','25','50','75','100'].forEach(t=>{
+    const el=document.getElementById('tick-'+t);
+    if(el) el.classList.remove('active');
+  });
+  const nearest=[0,25,50,75,100].reduce((a,b)=>Math.abs(b-val)<Math.abs(a-val)?b:a);
+  const nEl=document.getElementById('tick-'+nearest);
+  if(nEl) nEl.classList.add('active');
+  // Quick-set buttons
+  document.querySelectorAll('.slider-qbtn').forEach(b=>{
+    b.style.background='transparent';
+    b.style.color='#8C5A2A';
+    b.style.borderColor='rgba(226,179,101,.45)';
+  });
+  const qb=document.getElementById('qbtn-'+val);
+  if(qb){ qb.style.background='#B77C12'; qb.style.color='#fff'; qb.style.borderColor='#B77C12'; }
+  // Earning estimate (~12 CST/hr at 100%)
+  const rate=Math.round((val/100)*12);
+  document.getElementById('slider-earn-rate').textContent='~'+rate+' CST/hr';
+}
+function setSlider(val){
+  const s=document.getElementById('cpu-slider');
+  if(s){ s.value=val; updateSlider(val); }
+}
+
+// Responsive navbar
+function handleResize(){
+  const w=window.innerWidth;
+  document.getElementById('desktop-nav').style.display=w<768?'none':'flex';
+  document.getElementById('hamburger').style.display=w<768?'block':'none';
+  // Ring grid
+  const rg=document.getElementById('ring-grid');
+  if(rg) rg.style.gridTemplateColumns=w<640?'1fr':'1fr 2fr';
+  // Stats grid
+  const sg=document.getElementById('stats-grid');
+  if(sg) sg.style.gridTemplateColumns=w<640?'1fr 1fr':'1fr 1fr 1fr 1fr';
+}
+window.addEventListener('resize',handleResize);
+handleResize();
+
+// Init
+renderTx();
+renderLB();
+updateCost();
+
+// ════════════════════════════════════════════════════════════
+// COMPUTESHARE — BACKEND INTEGRATION
+// Web Workers + WebAssembly + Socket.io + REST APIs
+// ════════════════════════════════════════════════════════════
+
+const BACKEND = 'http://localhost:3000';
+
+// ── 1. Socket.io — Real-time backend connection ──────────────
+const socket = io(BACKEND, { transports: ['websocket','polling'] });
+
+socket.on('connect', () => {
+  console.log('🟢 Socket connected to ComputeShare backend');
+  showBackendBadge(true);
+});
+
+socket.on('disconnect', () => {
+  console.log('🔴 Socket disconnected');
+  showBackendBadge(false);
+});
+
+socket.on('dashboard:update', (data) => {
+  console.log('📊 Dashboard update:', data);
+  // Live active worker count update
+  const el = document.getElementById('live-active-workers');
+  if (el) el.textContent = data.activeWorkers;
+});
+
+function showBackendBadge(online) {
+  let badge = document.getElementById('backend-status-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.id = 'backend-status-badge';
+    badge.style.cssText = 'position:fixed;bottom:1rem;right:1rem;z-index:999;padding:.4rem .85rem;border-radius:9999px;font-size:.72rem;font-weight:800;font-family:DM Sans,sans-serif;box-shadow:0 4px 12px rgba(0,0,0,.15);transition:all .3s';
+    document.body.appendChild(badge);
+  }
+  badge.textContent = online ? '🟢 Backend Connected' : '🔴 Backend Offline';
+  badge.style.background = online ? 'rgba(22,163,74,.15)' : 'rgba(239,68,68,.12)';
+  badge.style.color = online ? '#16a34a' : '#ef4444';
+  badge.style.border = online ? '1px solid rgba(22,163,74,.3)' : '1px solid rgba(239,68,68,.25)';
+}
+
+// ── 2. WebAssembly — Near-native browser computation ─────────
+// WASM module: exports compute(n) → n * n  (square of n)
+let wasmCompute = null;
+
+async function loadWASM() {
+  try {
+    const wasmBytes = new Uint8Array([
+      // magic + version
+      0x00,0x61,0x73,0x6d, 0x01,0x00,0x00,0x00,
+      // type section: func (i32) -> i32
+      0x01,0x06,0x01,0x60, 0x01,0x7f,0x01,0x7f,
+      // function section: 1 function, type 0
+      0x03,0x02,0x01,0x00,
+      // export section: "compute" → func 0
+      0x07,0x0b,0x01,0x07, 0x63,0x6f,0x6d,0x70,0x75,0x74,0x65,0x00,0x00,
+      // code section: local.get 0, local.get 0, i32.mul, end
+      0x0a,0x09,0x01,0x07, 0x00,0x20,0x00,0x20,0x00,0x6c,0x0b
+    ]);
+    const { instance } = await WebAssembly.instantiate(wasmBytes);
+    wasmCompute = instance.exports.compute;
+    console.log('✅ WASM loaded — compute(7) =', wasmCompute(7)); // should log 49
+  } catch (err) {
+    console.warn('WASM load failed:', err);
+  }
+}
+loadWASM();
+
+// ── 3. Web Worker — Background CPU computation ────────────────
+// Runs heavy computation off the main thread (non-blocking)
+const workerCode = `
+  self.onmessage = function(e) {
+    const { type, data } = e.data;
+    if (type === 'compute') {
+      // Fibonacci — CPU intensive, good for demo
+      function fib(n) {
+        if (n <= 1) return n;
+        return fib(n - 1) + fib(n - 2);
+      }
+      const n = Math.min(data.number || 35, 40); // cap at 40
+      const start = Date.now();
+      const result = fib(n);
+      const ms = Date.now() - start;
+      self.postMessage({ type: 'result', result, input: n, ms });
+    }
+  };
+`;
+const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+const workerBlobUrl = URL.createObjectURL(workerBlob);
+let cpuWorker = null;
+let currentWorkerId = null;
+
+// ── 4. Override toggleDonation — connect to backend ───────────
+const _origToggle = window.toggleDonation;
+window.toggleDonation = function () {
+  _origToggle(); // run original UI logic
+
+  if (donating) {
+    // Generate unique worker ID for this session
+    currentWorkerId = 'worker-' + Math.random().toString(36).substr(2, 8);
+    const cpuVal = parseInt(document.getElementById('cpu-slider')?.value || 50);
+
+    // Emit Socket.io join event → backend tracks this worker
+    socket.emit('worker:join', { workerId: currentWorkerId, cpu: cpuVal });
+    console.log('🔌 Worker joined:', currentWorkerId);
+
+    // Register in MongoDB via REST API
+    fetch(BACKEND + '/api/dashboard/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workerId: currentWorkerId, cpuDonated: cpuVal })
+    })
+      .then(r => r.json())
+      .then(d => console.log('✅ Worker registered in DB:', d.message))
+      .catch(() => console.log('⚠️ Backend offline — running in demo mode'));
+
+    // Start Web Worker for background CPU computation
+    cpuWorker = new Worker(workerBlobUrl);
+    cpuWorker.onmessage = (e) => {
+      if (e.data.type === 'result') {
+        console.log(`🧮 Web Worker → fib(${e.data.input}) = ${e.data.result} [${e.data.ms}ms]`);
+      }
+    };
+    // Start computation loop every 8 seconds
+    cpuWorker.postMessage({ type: 'compute', data: { number: 35 } });
+    
+    const cpuVal2 = parseInt(document.getElementById('cpu-slider')?.value || 50);
+// Slider jitna zyada → interval utna kam → zyada computation
+const interval = Math.round(8000 - (cpuVal2 / 100) * 7000); // 25%→6s, 50%→4s, 100%→1s
+window._workerLoop = setInterval(() => {
+  if (cpuWorker) {
+    const currentCpu = parseInt(document.getElementById('cpu-slider')?.value || 50);
+    const n = Math.round((currentCpu / 100) * 10) + 30; // 25%→32, 100%→40
+    cpuWorker.postMessage({ type: 'compute', data: { number: n } });
+    console.log(`⚙️ CPU Throttle: ${currentCpu}% → fib(${n})`);
+  }
+}, interval);
+  } else {
+    // Stop Web Worker
+    if (cpuWorker) { cpuWorker.terminate(); cpuWorker = null; }
+    clearInterval(window._workerLoop);
+    currentWorkerId = null;
+    console.log('⛔ Worker stopped');
+  }
+};
+
+// ── 5. Override submitTask — send to backend ──────────────────
+const _origSubmit = window.submitTask;
+window.submitTask = function () {
+  _origSubmit(); // run original UI animation
+
+  const content = document.getElementById('task-content')?.value?.trim();
+  // Use content length as the computation number (demo)
+  const number = content ? (content.length % 90) + 10 : Math.floor(Math.random() * 50) + 10;
+
+  // WASM preview compute (instant, browser-side)
+  if (wasmCompute) {
+    const wasmResult = wasmCompute(number);
+    console.log(`⚡ WASM → compute(${number}) = ${wasmResult} (n²)`);
+  }
+
+  // Submit task to backend queue (BullMQ via Redis)
+  fetch(BACKEND + '/api/tasks/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ number })
+  })
+    .then(r => r.json())
+    .then(d => {
+      console.log('✅ Task in backend queue → Job ID:', d.jobId);
+      // Poll for result after 2s
+      if (d.jobId) setTimeout(() => checkJobStatus(d.jobId), 2000);
+    })
+    .catch(() => console.log('⚠️ Backend offline — task queued locally (demo)'));
+};
+
+// ── 6. Poll job status after submission ───────────────────────
+async function checkJobStatus(jobId) {
+  try {
+    const res = await fetch(`${BACKEND}/api/tasks/status/${jobId}`);
+    const data = await res.json();
+    console.log(`📦 Job ${jobId} → state: ${data.state}, result:`, data.result);
+  } catch (e) { /* silent */ }
+}
+
+// ── 7. Live dashboard stats from backend ─────────────────────
+async function fetchDashboardStats() {
+  try {
+    const res = await fetch(BACKEND + '/api/dashboard/stats');
+    const data = await res.json();
+    console.log('📊 Live stats:', data);
+
+    // Update any live stat elements
+    const map = {
+      'live-worker-count': data.totalWorkers,
+      'live-task-count': data.totalTasksCompleted,
+      'live-cpu-total': data.totalCPUDonated + '%',
+    };
+    Object.entries(map).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = val;
+    });
+  } catch (e) {
+    console.log('⚠️ Stats fetch failed — backend may be offline');
+  }
+}
+
+// ── 8. Override navigate — fetch stats on dashboard open ──────
+const _origNavigate = window.navigate;
+window.navigate = function (page) {
+  _origNavigate(page);
+  if (page === 'dashboard') fetchDashboardStats();
+};
+
+// Auto-fetch stats on load
+fetchDashboardStats();
+
+navigate('landing');
+
+</script>
+</body>
+</html>
